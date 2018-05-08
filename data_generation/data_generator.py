@@ -10,7 +10,6 @@ NB_EPOCHS = None
 NUM_PARALLEL_CALLS = 4
 PREFETCH_BUFFER_SIZE = 2 ** 8
 SHUFFLE_BUFFER_SIZE = 2 ** 8
-NB_IMAGES = 1e6
 
 
 def get_landmark_challange_generator(data_dir):
@@ -38,7 +37,6 @@ def get_landmark_challange_generator(data_dir):
 		data = list(zip(image_names, labels))
 		random.shuffle(data)
 		image_names, labels = list(zip(*data))
-		image_names, labels = image_names[:NB_IMAGES], labels[:NB_IMAGES]
 		image_paths = [data_dir + image_name for image_name in image_names]
 		for image_path, label in zip(image_paths, labels):
 			yield image_path, label
@@ -47,7 +45,7 @@ def get_landmark_challange_generator(data_dir):
 
 def input_fn(batch_size, data_dir, is_training=True):
 	# get the generator fn
-	gen = get_landmark_challange_generator(data_dir, NB_IMAGES)
+	gen = get_landmark_challange_generator(data_dir)
 
 	def _parse_function(filename, label):
 		image_string = tf.read_file(filename)
