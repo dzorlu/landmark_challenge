@@ -1,8 +1,12 @@
 import tensorflow as tf
 import tensorflow_hub as hub
+import pandas as pd
 import argparse
 import sys
 import os
+import collections
+
+print(tf.__version__)
 
 
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
@@ -30,16 +34,30 @@ TRAINED_MODEL_PATH = "https://tfhub.dev/google/imagenet/mobilenet_v2_140_224/fea
 TRAIN_IMAGE_SIZE = 224
 
 
-def add_summaries(predictions, features, loss):
+def write_predictions_to_file(predictions):
+	"""
+	
+	:param predictions: {predicted_class_score, predicted_class}
+	:return: csv file in id, landmark_id, score
+	"""
+	out = []
+	pred = collections.namedtuple('pred', ['id','landmark_id', 'score'])
+	for prediction in predictions:
+		_pred = pred(prediction['image_id'], prediction['predicted_class'], prediction['predicted_class_score'])
+		out.append(_pred)
+	pd.DataFrame(out).to_csv('output.csv', index=False)
+
+def add_summaries(accuracy, loss):
 	"""
 	Add summaries for images, variables and losses.
 	"""
 	global_summaries = set([])
+	global_summaries.add(tf.summary.scalar('accuracy', accuracy[1]))
 	for model_var in tf.get_collection('trainable_variables'):
 		global_summaries.add(tf.summary.histogram(model_var.op.name, model_var))
 	# total loss
 	global_summaries.add(tf.summary.scalar('loss', loss))
-	summary_op = tf.summary.merge(list(global_summaries), name='summary_op')
+	summary_op = tf.summary.merge_all()
 	return summary_op
 
 
@@ -67,19 +85,24 @@ def model_fn(features, labels, mode, params):
 	Returns:
 	  ModelFnOps for Estimator API.
 	"""
+	image, image_name = features.get('image'), features.get('image_name')
 	number_classes = params.get('number_classes')
 	tf.logging.info("features tensor {}".format(features))
 	tf.logging.info("labels tensor {}".format(labels))
 
 	module = hub.Module(TRAINED_MODEL_PATH, trainable=(mode == tf.estimator.ModeKeys.TRAIN))
-	features = module(features)
+	features = module(image)
 	logits = tf.layers.dense(features, units=number_classes, trainable=(mode == tf.estimator.ModeKeys.TRAIN))
 	probs = tf.nn.softmax(logits)
-	predicted_classes = tf.argmax(probs, axis=1)
+	predicted_class = tf.argmax(probs, axis=1)
 	if mode == tf.estimator.ModeKeys.PREDICT:
 		tf.logging.info("Starting to predict..")
 		predictions = {
 			'probabilities': probs,
+			# the second item in the tuple correspnds to image_id in test input_fn
+			'image_id': image_name,
+			'predicted_class': predicted_class,
+			'predicted_class_score': tf.reduce_max(probs, axis=1)
 		}
 		return tf.estimator.EstimatorSpec(mode, predictions=predictions)
 
@@ -91,14 +114,10 @@ def model_fn(features, labels, mode, params):
 		logits=logits, onehot_labels=one_hot_labels)
 	loss = tf.losses.get_total_loss()
 
-	if mode == tf.estimator.ModeKeys.EVAL:
-		tf.logging.info("Starting to eval..")
-		# Compute evaluation metrics.
-		accuracy = tf.metrics.accuracy(labels=labels, predictions=predicted_classes, name='acc_op')
-		metrics = {'accuracy': accuracy}
-		tf.summary.scalar('accuracy', accuracy[1])
-		return tf.estimator.EstimatorSpec(
-			mode, loss=loss, eval_metric_ops=metrics)
+	accuracy = tf.metrics.accuracy(labels=labels, predictions=predicted_class, name='acc_op')
+
+	# Compute evaluation metrics.
+	metrics = {'accuracy': accuracy}
 
 	assert mode == tf.estimator.ModeKeys.TRAIN
 	tf.logging.info("Starting to train..")
@@ -107,14 +126,15 @@ def model_fn(features, labels, mode, params):
 	optimizer = tf.train.AdagradOptimizer(learning_rate=1e-4)
 	with tf.control_dependencies(update_ops):
 		train_op = optimizer.minimize(loss, global_step=global_step)
-	tf.logging.info("predicted_classess {}".format(predicted_classes))
-	add_summaries(predicted_classes, features, loss)
+	tf.logging.info("predicted_classess {}".format(predicted_class))
+	add_summaries(accuracy, loss)
+	train_spec = tf.estimator.EstimatorSpec(mode, loss=loss, train_op=train_op)
+	#eval_spec = tf.estimator.EstimatorSpec(mode, loss=loss, eval_metric_ops=metrics)
 	return tf.estimator.EstimatorSpec(mode, loss=loss, train_op=train_op)
 
 
 def main(argv):
 	args = parser.parse_args(argv[1:])
-	print(args)
 	predict = args.predict
 	config = tf.estimator.RunConfig(
 		save_checkpoints_steps=100,
@@ -138,10 +158,14 @@ def main(argv):
 		# # Eval the Model.
 		# classifier.evaluate(
 		# 	input_fn=lambda: input_fn(args.batch_size, args.data_dir))
-	# else:
-		# Predict the model.
-		# pred_result = classifier.predict(
-		# 	input_fn=lambda: generate_predict_data())
+	else:
+		#Predict the model.
+		prediction_results = classifier.predict(
+			input_fn=lambda: input_fn(args.batch_size, args.data_dir, is_training=False))
+		tf.logging.info(prediction_results)
+		write_predictions_to_file(prediction_results)
+
+
 
 if __name__ == '__main__':
 	tf.logging.set_verbosity(tf.logging.INFO)
