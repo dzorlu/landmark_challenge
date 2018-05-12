@@ -43,7 +43,7 @@ def write_predictions_to_file(predictions):
 	out = []
 	pred = collections.namedtuple('pred', ['id','landmark_id', 'score'])
 	for prediction in predictions:
-		_pred = pred(prediction['image_id'], prediction['predicted_class'], prediction['predicted_class_score'])
+		_pred = pred(str(prediction['image_id']), prediction['predicted_class'], prediction['predicted_class_score'])
 		out.append(_pred)
 	pd.DataFrame(out).to_csv('output.csv', index=False)
 
